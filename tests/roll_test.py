@@ -6,9 +6,10 @@ import time
 import spheropy
 
 from bluetooth_interface import BluetoothInterface
+from ble_interface import BleInterface
 
 async def main():
-    socket = BluetoothInterface()
+    socket = BleInterface()
     socket.connect()
     my_sphero = spheropy.Sphero(socket)
 
