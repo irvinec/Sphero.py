@@ -1,8 +1,8 @@
 """
 """
 
-import bluetooth # pybluez
-import bluetooth.ble as ble
+import pygatt
+import serial
 
 class BleInterface(object):
     """
@@ -25,11 +25,9 @@ class BleInterface(object):
                 _, self._target_address, _ = _find_device(self._target_name)
 
             if self._target_address is not None:
-                self._requester = ble.GATTRequester(self._target_address, True) # True means connect to the device
-                #self._response = ble.GATTResponse(self._target_address)
-                result = self._requester.discover_characteristics()
-                print (f'Result of discover_characteristics(): {result}')
-            elif num_tries >= num_retry_attempts:
+                pass
+                # connect to the device and setup sockets.
+            elif num_tries >= num_retry_attempts - 1:
                 if self._target_address is None:
                     raise RuntimeError(
                             f'Could not find device with name {self._target_name} after {num_tries} tries.'
@@ -62,8 +60,24 @@ def _find_device(name):
     found_device = False
     found_device_name = None
     found_device_address = None
-    discovery_service = ble.DiscoveryService()
-    nearby_devices = discovery_service.discover(2)
+
+    # Search for adapter (Windows only)
+    adapter = None
+    found_adapter = False
+    for port_num in range(10):
+        try:
+            adapter = pygatt.BGAPIBackend(serial_port=f'COM{port_num}')
+            adapter.start()
+            found_adapter = True
+            break
+        except pygatt.exceptions.NotConnectedError:
+            continue
+
+    if not found_adapter:
+        raise RuntimeError('Could not find bluetooth adapter.')
+
+    nearby_devices = adapter.scan()
+    print(f'Nearby Devices: {nearby_devices}.')
     if nearby_devices:
         for address, name in nearby_devices.items():
             if name.startswith(name):
