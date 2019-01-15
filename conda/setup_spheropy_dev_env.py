@@ -5,8 +5,6 @@ import argparse
 import subprocess
 import shutil
 
-_conda_packages = ['python=3.6', 'pylint', 'git']
-
 def main():
     script_args = parse_args()
     if not is_conda_available():
@@ -39,7 +37,7 @@ def install_deps():
     )
     subprocess.check_call(['pip', 'install',
         # install pybluez. If running on windows we need to install irvinec's fork that has a patch for windows.
-        'git+https://github.com/irvinec/pybluez' if is_running_on_windows() else 'git+https://github.com/irvinec/pybluez',
+        'git+https://github.com/irvinec/pybluez' if is_running_on_windows() else 'git+https://github.com/pybluez/pybluez',
         # install pygatt
         'git+https://github.com/peplin/pygatt'])
     # TODO: let's see if we can use pygatt for the ble communication since it x-plat and installed fine here.

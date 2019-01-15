@@ -10,8 +10,7 @@ from collections import namedtuple
 # TODO: Need more parameter validation on functions.
 
 class Sphero(object):
-    """The main class that is used for interacting with a Sphero device.
-    """
+    """The main class that is used for interacting with a Sphero device."""
 
     def __init__(self, bluetooth_interface, default_response_timeout_in_seconds=0.5):
         self.on_collision = []
