@@ -6,13 +6,12 @@ import uuid
 import pygatt
 
 _BLE_SERVICE = uuid.UUID("22bb746f-2bb0-7554-2d6f-726568705327")
-# Sending 0x01 to BLEService and WakeCharacteristic is for wake.
 _BLE_SERVICE_WAKE = uuid.UUID("22bb746f-2bbf-7554-2d6f-726568705327")
+_BLE_SERVICE_TX_POWER = uuid.UUID("22bb746f-2bb2-7554-2d6f-726568705327")
+_BLE_SERVICE_ANTI_DOS = uuid.UUID("22bb746f-2bbd-7554-2d6f-726568705327")
 _ROBOT_SERVICE = uuid.UUID('22BB746F-2BA0-7554-2D6F-726568705327')
 _ROBOT_SERVICE_CONTROL = uuid.UUID('22BB746F-2BA1-7554-2D6F-726568705327')
 _ROBOT_SERVICE_RESPONSE = uuid.UUID('22BB746F-2BA6-7554-2D6F-726568705327')
-
-
 
 class BleInterface(object):
     """
@@ -41,16 +40,8 @@ class BleInterface(object):
                     address=self._address,
                     address_type=pygatt.BLEAddressType.random
                 )
-                # TODO: Need to look at spherojs to understand the protocol here.
-                # we might need to look for individual characteristics.
-                characteristics = self._device.discover_characteristics()
-                # TODO: try turn on full dev mode
-                # Set TXPower
-                # Send something to ANTI-DOS service/char.
-                # see sphero.js
-                # We probably want the bluetooth interface to convert to bytes not, spheropy
-                self._device.char_write(_BLE_SERVICE_WAKE, bytearray([0x01]))
-                print('Just sent wake command.')
+
+                self._turn_on_dev_mode()
             elif num_tries >= num_retry_attempts - 1:
                 if self._address is None:
                     raise RuntimeError(
@@ -64,21 +55,36 @@ class BleInterface(object):
     def send(self, data):
         """
         """
-        #b'\xff\xfe\x020\x00\x05\x7f\x00\x00\x01H'
-        #self._device.char_write(_ROBOT_SERVICE_CONTROL, bytearray([255, 254, 2, 48, 0, 5, 127, 0, 0, 1, 72]))
+        # TODO: need to understand how ble ack works
         self._device.char_write(_ROBOT_SERVICE_CONTROL, data)
-
 
     def recv(self, num_bytes):
         """
         """
-        return self._device.char_read(_ROBOT_SERVICE_RESPONSE, timeout=5)
-
+        # TODO: need to configure timeout data.
+        # TODO: I think we need to use the subscription model instead.
+        # See self._device.subscribe()
+        print('Reading data...')
+        data = list(self._device.char_read(_ROBOT_SERVICE_RESPONSE, timeout=1))
+        print(f'Received Data: {data}')
+        return data
 
     def close(self):
         """
         """
         self._device.disconnect()
+
+    def _turn_on_dev_mode(self):
+        """Turns on 'dev mode' for the Sphero.
+
+        This is necessary to start sending the raw commands to the Sphero.
+        """
+        print('Turning on dev mode.')
+        anti_dos_message = '011i3'
+        self._device.char_write(_BLE_SERVICE_ANTI_DOS, bytes([ord(c) for c in anti_dos_message]))
+        self._device.char_write(_BLE_SERVICE_TX_POWER, bytes([7]))
+        # Sending 0x01 to the wake service wakes the service.
+        self._device.char_write(_BLE_SERVICE_WAKE, bytes([0x01]))
 
 def _find_device(name):
     """
@@ -122,7 +128,11 @@ def _find_device(name):
     return adapter, found_device, found_device_address, found_device_name
 
 def is_windows():
+    """
+    """
     return os.name == 'nt'
 
 def is_linux():
+    """
+    """
     return os.name == 'posix'

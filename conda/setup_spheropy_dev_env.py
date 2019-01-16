@@ -33,7 +33,8 @@ def install_deps():
     subprocess.check_call(['conda', 'install', '--yes',
         'python=3.6',
         'pylint',
-        'git']
+        'git',
+        'pexpect']
     )
     subprocess.check_call(['pip', 'install',
         # install pybluez. If running on windows we need to install irvinec's fork that has a patch for windows.
