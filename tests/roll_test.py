@@ -3,7 +3,7 @@
 
 import asyncio
 import time
-from test_utils import parse_args
+from tests.test_utils import parse_args
 import spheropy
 
 async def main():
@@ -25,7 +25,6 @@ async def main():
     await sphero.roll(255, 180)
     time.sleep(0.5)
     await sphero.roll(0, 0)
-
 
 if __name__ == "__main__":
     main_loop = asyncio.get_event_loop()

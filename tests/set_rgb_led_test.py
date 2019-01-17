@@ -4,7 +4,7 @@
 import asyncio
 import time
 import spheropy
-from test_utils import parse_args
+from tests.test_utils import parse_args
 
 async def main():
     script_args = parse_args()
@@ -21,7 +21,6 @@ async def main():
     time.sleep(2)
     await sphero.set_rgb_led(0xFF, 0xFF, 0xFF)
     time.sleep(2)
-
 
 if __name__ == "__main__":
     main_loop = asyncio.get_event_loop()
