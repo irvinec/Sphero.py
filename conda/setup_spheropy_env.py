@@ -1,23 +1,23 @@
-"""Setup a conda environment for spheropy development."""
-# Keep this file in sync with setup_spheropy_dev_env.py
+"""Setup a conda environment for working with spheropy."""
+# Keep this file in sync with setup_spheropy_env.py
 
 import os, sys
 import subprocess
 
 def main():
-    print('Setting up SpheroPy development conda environment.')
+    print('Setting up SpheroPy conda environment.')
     if not is_conda_available():
         print('\"conda\" is not available in this context. Are you sure you have minconda or anaconda installed and are running this from a conda environment?')
 
     add_conda_forge()
     install_deps()
+    install_spheropy()
     # Give python access to bluetooth
     if is_running_on_linux():
         subprocess.check_call(['sudo', 'apt-get', 'install', '-y', 'libcap2-bin'])
         subprocess.check_call("sudo setcap 'cap_net_raw,cap_net_admin+eip' `which python3.6`", shell=True)
 
     print('Done setting up environment.')
-    print("Please install SpheroPy from source using 'pip install -e .'")
 
 def is_conda_available():
     try:
@@ -43,6 +43,9 @@ def install_deps():
         # install pygatt
         'git+https://github.com/peplin/pygatt']
     )
+
+def install_spheropy():
+    subprocess.check_call(['pip', 'install', 'git+https://github.com/irvinec/SpheroPy'])
 
 def add_conda_forge():
     subprocess.check_call(['conda', 'config', '--add', 'channels', 'conda-forge'])

@@ -8,8 +8,18 @@ import threading
 import struct
 from collections import namedtuple
 # TODO: Wrap these (bluetooth related) imports in exception handling
-import bluetooth # pybluez
-import pygatt
+
+try:
+    import bluetooth # pybluez
+    HAS_PYBLUEZ = True
+except Exception:
+    HAS_PYBLUEZ = False
+
+try:
+    import pygatt
+    HAS_PYGATT = True
+except Exception:
+    HAS_PYGATT = False
 
 # TODO: Need more parameter validation on functions and throughout.
 
@@ -27,16 +37,6 @@ class Sphero(object):
 
         self._receive_buffer = []
 
-        # setup thread for receiving responses
-        # self._class_destroy_event = threading.Event()
-        # self._receive_thread = threading.Thread(target=self._receive_thread_run)
-        # self._receive_thread.daemon = True
-        # self._receive_thread.start()
-
-    def __del__(self):
-        pass
-        # self._class_destroy_event.set()
-
     async def connect(self,
             search_name=None,
             address=None,
@@ -44,19 +44,44 @@ class Sphero(object):
             bluetooth_interface=None,
             use_ble=False,
             num_retry_attempts=1):
-        """
+        """Connects to the Sphero.
+
+        Must be called before calling any other methods.
+
+        Args:
+            search_name (str):
+                The partial name of the device to connect to.
+                Must be specified if address is not.
+            address (str):
+                The bluetooth address of the device.
+                Must be specified if search_name is not.
+            port (str or int):
+                Can have different meaning for different bluetooth interfaces.
+                Can be the bluetooth port, or COM port.
+            bluetooth_interface (BluetoothInterfaceBase):
+                A custom bluetooth interface to use instead of the defaults.
+            use_ble (bool):
+                Indicates that BLE protocol should be used.
+            num_retry_attempts (int):
+                The number of times to try to connect.
+                Defaults to 1.
         """
         # Create the bluetooth interface
+        global HAS_PYGATT
+        global HAS_PYBLUEZ
         if bluetooth_interface is None:
-            if use_ble:
+            if use_ble and HAS_PYGATT:
                 self._bluetooth_interface = BleInterface(search_name=search_name, address=address, port=port)
-            else:
+            elif HAS_PYBLUEZ:
                 self._bluetooth_interface = BluetoothInterface(search_name=search_name, address=address, port=port)
+            else:
+                raise RuntimeError('Could not import either pybluez or pygatt. At least one is required.')
         else:
             self._bluetooth_interface = bluetooth_interface
 
         self._bluetooth_interface.data_received_handler = self._handle_data_received
         self._bluetooth_interface.connect(num_retry_attempts=num_retry_attempts)
+        print('Connected to Sphero.')
 
     async def ping(self,
             wait_for_response=True,
@@ -82,8 +107,6 @@ class Sphero(object):
             wait_for_response=wait_for_response,
             reset_inactivity_timeout=reset_inactivity_timeout)
 
-        # Ping has no data so don't in response,
-        # so no need tp return anything.
         await self._send_command(
             command,
             response_timeout_in_seconds)
@@ -714,8 +737,8 @@ class Sphero(object):
 
         return response_packet
 
-    # TODO: going to refactor this into a data received handler
     def _handle_data_received(self, received_data):
+        # TODO: we probably want to lock this buffer.
         self._receive_buffer.extend(received_data)
         response_packet = None
         while len(self._receive_buffer) >= _MIN_PACKET_LENGTH:
@@ -723,14 +746,14 @@ class Sphero(object):
                 response_packet = _ResponsePacket(self._receive_buffer)
                 # we have a valid response to handle
                 # break out of the inner while loop to handle
-                # the response
+                # the response.
                 break
             except BufferNotLongEnoughError:
-                # break out of inner loop so we can fetch more data
+                # break out of inner loop and wait till we get more data.
                 break
             except PacketParseError:
-                # this is an error in the packet format
-                # remove one byte from the buffer and try again
+                # There is an error in the packet format
+                # remove one byte from the buffer and try again.
                 self._receive_buffer.pop(0)
                 continue
 
@@ -739,10 +762,10 @@ class Sphero(object):
                 if response_packet.id_code is _ID_CODE_COLLISION_DETECTED:
                     collision_info = _parse_collision_info(response_packet.data)
                     for func in self.on_collision:
-                        # schedule the callback on its own thread.
+                        # Schedule the callback on its own thread.
                         # TODO: there is probably a more asyncio way of doing this, but do we care?
-                        # maybe we can run the function on the main thread's event loop?
-                        # TODO: refactor kicking off callback in seperate thread to a function
+                        # Maybe we can run the function on the main thread's event loop?
+                        # TODO: Refactor kicking off callback in seperate thread to a function
                         callback_thread = threading.Thread(target=func, args=[collision_info])
                         callback_thread.daemon = True
                         callback_thread.start()
@@ -758,8 +781,8 @@ class Sphero(object):
                 if sequence_number in self._commands_waiting_for_response:
                     self._commands_waiting_for_response[sequence_number](response_packet)
                     # NOTE: it is up to the callback/waiting function to remove the handler.
-                # remove the packet we just handled
 
+            # remove the packet we just handled
             del self._receive_buffer[:response_packet.packet_length]
 
     def _get_and_increment_command_sequence_number(self):
@@ -817,15 +840,65 @@ class BufferNotLongEnoughError(PacketParseError):
 
 #region Bluetooth Interfaces
 
-class BluetoothInterface(object):
+class BluetoothInterfaceBase(object):
+    """Base class for Bluetooth Interfaces
+
+    Args:
+        search_name (str):
+            The name to use when searching for Sphero device.
+            Finds any device that starts with search_name.
+            Defaults to DEFAULT_SEARCH_NAME.
+            Only used if address is not specified.
+        address (str):
+            The bluetooth address of the device.
+            If not specified, search_name should be specified.
+        port (str or int):
+            Can have different meaning for subclasses.
+            Can be the bluetooth port, or COM port.
+            Defaults to DEFAULT_PORT
     """
-    """
+    DEFAULT_SEARCH_NAME = None
+    DEFAULT_PORT = None
 
     def __init__(self, search_name=None, address=None, port=None):
         super().__init__()
-        self._search_name = 'Sphero' if search_name is None else search_name
-        self._port = 1 if port is None else port
+        self.data_received_handler = None
+        self._search_name = self.DEFAULT_SEARCH_NAME if search_name is None else search_name
+        self._port = self.DEFAULT_PORT if port is None else port
         self._address = address
+
+    def connect(self, num_retry_attempts=1):
+        """Connects to the sphero device.
+
+        Args:
+            num_retry_attempts (int):
+                The number of times to try to connect.
+                Defaults to 1.
+        """
+        pass
+
+    def send(self, data):
+        """Sends raw data to the device.
+
+        Args:
+            data (list):
+                The raw data to send as list of bytes.
+        """
+        pass
+
+    def disconnect(self):
+        """Disconnects from the device."""
+        pass
+
+
+class BluetoothInterface(BluetoothInterfaceBase):
+    """Legacy Bluetooth Interface"""
+
+    DEFAULT_SEARCH_NAME = 'Sphero'
+    DEFAULT_PORT = 1
+
+    def __init__(self, search_name=None, address=None, port=None):
+        super().__init__(search_name, address, port)
         self._sock = None
 
         # setup thread for receiving responses
@@ -835,8 +908,8 @@ class BluetoothInterface(object):
         self._receive_thread.start()
 
     def connect(self, num_retry_attempts=1):
-        """
-        """
+        super().connect(num_retry_attempts)
+        is_connected = False
         for _ in range(num_retry_attempts):
             if self._address is None:
                 self._address = self._find_device(self._search_name)
@@ -844,42 +917,44 @@ class BluetoothInterface(object):
             if self._address is not None:
                 self._sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
                 self._sock.connect((self._address, self._port))
+                is_connected = True
                 break
 
         if self._address is None:
             raise RuntimeError(
                 f'Could not find device with name {self._search_name} after {num_retry_attempts} tries.'
             )
-        elif self._sock is not None and not self._sock.connected:
+        elif not is_connected:
             raise RuntimeError(
                 f'Count not connect to device {self._address} after {num_retry_attempts} tries.'
             )
 
     def send(self, data):
-        """
-        """
         if self._sock is not None:
             self._sock.send(data)
 
     def disconnect(self):
-        """
-        """
         if self._sock is not None:
             self._sock.close()
 
     def _receive_thread_run(self):
-        """
+        """Checks for received data and calls handler.
+
+        Used to create background thread to listen
+        for data received from device.
         """
         while not self._class_destroy_event.is_set():
             if self._sock is not None:
                 data = self._sock.recv(1024)
                 if data is not None and len(data) > 0:
-                    self.data_received_handler(data)
+                    if self.data_received_handler is not None:
+                        if callable(self.data_received_handler):
+                            self.data_received_handler(data)
+                        else:
+                            raise ValueError('data_received_handler is not callable.')
 
     @staticmethod
     def _find_device(search_name):
-        """
-        """
         found_device_address = None
         nearby_devices = bluetooth.discover_devices(lookup_names=True)
         if nearby_devices:
@@ -891,9 +966,8 @@ class BluetoothInterface(object):
 
         return found_device_address
 
-class BleInterface(object):
-    """
-    """
+class BleInterface(BluetoothInterfaceBase):
+    """Bluetooth Low Energy (BLE) Interface"""
 
     _BLE_SERVICE = uuid.UUID("22bb746f-2bb0-7554-2d6f-726568705327")
     _BLE_SERVICE_WAKE = uuid.UUID("22bb746f-2bbf-7554-2d6f-726568705327")
@@ -906,17 +980,15 @@ class BleInterface(object):
     _ANTI_DOS_MESSAGE = '011i3'
     _TX_POWER_VALUE = 7
 
+    DEFAULT_SEARCH_NAME = 'SK'
+    DEFAULT_PORT = None
+
     def __init__(self, search_name=None, address=None, port=None):
-        super().__init__()
-        self.data_received_handler = None
-        self._search_name = 'SK' if search_name is None else search_name
-        self._address = None
-        self._port = port
+        super().__init__(search_name, address, port)
         self._device = None
 
     def connect(self, num_retry_attempts=1):
-        """
-        """
+        super().connect(num_retry_attempts)
         for _ in range(num_retry_attempts):
             if self._address is None:
                 adapter, self._address = self._find_device()
@@ -941,21 +1013,21 @@ class BleInterface(object):
             )
 
     def send(self, data):
-        """
-        """
+        super().send(data)
         if self._device is not None:
             # TODO: need to understand how ble ack works
             # so we know if we should set the wait_for_response param.
             self._device.char_write(self._ROBOT_SERVICE_CONTROL, data)
 
     def disconnect(self):
-        """
-        """
+        super().disconnect()
         if self._device is not None:
             self._device.disconnect()
 
     def _response_callback(self, characteristic_handle, value):
-        """
+        """Callback for when data is received from device.
+
+        Calls registered data received handler
         """
         if self.data_received_handler is not None:
             if callable(self.data_received_handler):
@@ -981,8 +1053,6 @@ class BleInterface(object):
             self._device.char_write(self._BLE_SERVICE_WAKE, bytes([0x01]))
 
     def _find_device(self):
-        """
-        """
         # Search for adapter
         adapter = None
         found_adapter = False
@@ -1011,6 +1081,7 @@ class BleInterface(object):
                 pass
 
         if found_adapter:
+            # Look for the device
             found_device_address = None
             nearby_devices = adapter.scan()
             if nearby_devices:
