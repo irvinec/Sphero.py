@@ -7,7 +7,6 @@ import uuid
 import threading
 import struct
 from collections import namedtuple
-# TODO: Wrap these (bluetooth related) imports in exception handling
 
 try:
     import bluetooth # pybluez
@@ -20,6 +19,12 @@ try:
     HAS_PYGATT = True
 except Exception:
     HAS_PYGATT = False
+
+try:
+    import winble
+    HAS_WINBLE = True
+except Exception:
+    HAS_WINBLE = False
 
 # TODO: Need more parameter validation on functions and throughout.
 
@@ -70,12 +75,12 @@ class Sphero(object):
         global HAS_PYGATT
         global HAS_PYBLUEZ
         if bluetooth_interface is None:
-            if use_ble and HAS_PYGATT:
+            if use_ble:
                 self._bluetooth_interface = BleInterface(search_name=search_name, address=address, port=port)
             elif HAS_PYBLUEZ:
                 self._bluetooth_interface = BluetoothInterface(search_name=search_name, address=address, port=port)
             else:
-                raise RuntimeError('Could not import either pybluez or pygatt. At least one is required.')
+                raise RuntimeError('Could not import pybluez which is required for normal bluetooth (non-BLE) communication.')
         else:
             self._bluetooth_interface = bluetooth_interface
 
@@ -985,16 +990,21 @@ class BleInterface(BluetoothInterfaceBase):
 
     def __init__(self, search_name=None, address=None, port=None):
         super().__init__(search_name, address, port)
+        self._adapter = None
         self._device = None
 
     def connect(self, num_retry_attempts=1):
         super().connect(num_retry_attempts)
         for _ in range(num_retry_attempts):
             if self._address is None:
-                adapter, self._address = self._find_device()
+                if not self._find_adapter():
+                    continue
+
+                if not self._find_device():
+                    continue
 
             if self._address is not None:
-                self._device = adapter.connect(
+                self._device = self._adapter.connect(
                     address=self._address,
                     address_type=pygatt.BLEAddressType.random
                 )
@@ -1042,7 +1052,6 @@ class BleInterface(BluetoothInterfaceBase):
         and to receive data from the Sphero.
         """
         if self._device is not None:
-
             self._device.char_write(
                 self._BLE_SERVICE_ANTI_DOS,
                 bytes([ord(c) for c in self._ANTI_DOS_MESSAGE]))
@@ -1052,47 +1061,65 @@ class BleInterface(BluetoothInterfaceBase):
             # Sending 0x01 to the wake service wakes the sphero.
             self._device.char_write(self._BLE_SERVICE_WAKE, bytes([0x01]))
 
-    def _find_device(self):
-        # Search for adapter
+    def _find_adapter(self):
+        """
+        """
         adapter = None
         found_adapter = False
-        try:
-            adapter = pygatt.BGAPIBackend(serial_port=self._port)
-            adapter.start()
-            found_adapter = True
-        except pygatt.exceptions.NotConnectedError:
-            pass
 
-        if _is_windows():
-            for port_num in range(10):
-                try:
-                    adapter = pygatt.BGAPIBackend(serial_port=f'COM{port_num}')
-                    adapter.start()
-                    found_adapter = True
-                    break
-                except pygatt.exceptions.NotConnectedError:
-                    continue
-        elif _is_linux():
+        global HAS_PYGATT
+        if HAS_PYGATT:
             try:
-                adapter = pygatt.backends.GATTToolBackend()
+                adapter = pygatt.BGAPIBackend(serial_port=self._port)
                 adapter.start()
                 found_adapter = True
             except pygatt.exceptions.NotConnectedError:
                 pass
 
-        if found_adapter:
-            # Look for the device
-            found_device_address = None
-            nearby_devices = adapter.scan()
-            if nearby_devices:
-                for device in nearby_devices:
-                    name = device['name']
-                    if name is not None and name.startswith(self._search_name):
-                        found_device_address = device['address']
-                        print(f'Found device named: {name} at {found_device_address}')
-                        break
+        if not found_adapter:
+            global HAS_WINBLE
+            if _is_windows() and HAS_WINBLE:
+                try:
+                    adapter = winble.WinBleAdapter()
+                    adapter.start()
+                    found_adapter = True
+                except Exception:
+                    #pass
+                    # for now re-raise the exception
+                    raise
+            elif _is_linux() and HAS_PYGATT:
+                try:
+                    adapter = pygatt.backends.GATTToolBackend()
+                    adapter.start()
+                    found_adapter = True
+                except pygatt.exceptions.NotConnectedError:
+                    pass
 
-        return adapter, found_device_address
+        if found_adapter:
+            self._adapter = adapter
+
+        return found_adapter
+
+    def _find_device(self):
+        """
+        """
+        found_device = False
+        nearby_devices = None
+        try:
+            nearby_devices = self._adapter.scan()
+        except Exception:
+            pass
+
+        if nearby_devices is not None:
+            for device in nearby_devices:
+                name = device['name']
+                if name is not None and name.startswith(self._search_name):
+                    self._address = device['address']
+                    print(f'Found device named: {name} at {self._address}')
+                    found_device = True
+                    break
+
+        return found_device
 
 #endregion
 
