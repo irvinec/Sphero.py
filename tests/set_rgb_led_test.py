@@ -10,17 +10,20 @@ class SetRgbLedTest(unittest.TestCase):
     def setUp(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self._setUp())
+
+    async def _setUp(self):
         is_connected = False
         self.sphero = spheropy.Sphero()
         try:
-            self.loop.run_until_complete(self.sphero.connect(num_retry_attempts=3))
+            await self.sphero.connect(num_retry_attempts=3)
             is_connected = True
         except Exception:
             pass
 
         if not is_connected:
             try:
-                self.loop.run_until_complete(self.sphero.connect(num_retry_attempts=3, use_ble=True))
+                await self.sphero.connect(num_retry_attempts=3, use_ble=True)
                 is_connected = True
             except Exception:
                 pass
@@ -30,6 +33,7 @@ class SetRgbLedTest(unittest.TestCase):
 
     def tearDown(self):
         self.sphero.disconnect()
+        self.loop.close()
 
     def test_set_rgb_led(self):
         self.loop.run_until_complete(self.sphero.set_rgb_led(red=0xFF))
@@ -45,5 +49,3 @@ class SetRgbLedTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-    #main_loop = asyncio.get_event_loop()
-    #main_loop.run_until_complete(unittest.main())

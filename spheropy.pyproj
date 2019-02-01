@@ -5,8 +5,8 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{215b07e3-70ff-4dda-b96b-334b12af6167}</ProjectGuid>
     <ProjectHome />
-    <StartupFile>setup.py</StartupFile>
-    <SearchPath />
+    <StartupFile>tests\end_to_end_tests.py</StartupFile>
+    <SearchPath>$(PythonHome);$(ProjectDir)spheropy</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>
@@ -14,7 +14,10 @@
     <InterpreterId>CondaEnv|CondaEnv|spheropy-env</InterpreterId>
     <IsWindowsApplication>False</IsWindowsApplication>
     <EnableNativeCodeDebugging>True</EnableNativeCodeDebugging>
-    <CommandLineArguments>install</CommandLineArguments>
+    <CommandLineArguments>--ble</CommandLineArguments>
+    <InterpreterArguments>-i</InterpreterArguments>
+    <PublishUrl>
+    </PublishUrl>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'" />
   <PropertyGroup Condition="'$(Configuration)' == 'Release'" />
@@ -31,6 +34,9 @@
     <Compile Include="tests\bluetooth_info_test.py" />
     <Compile Include="tests\collision_test.py" />
     <Compile Include="tests\configure_locator_test.py" />
+    <Compile Include="tests\end_to_end_tests.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="tests\get_locator_info_test.py" />
     <Compile Include="tests\get_power_state_test.py" />
     <Compile Include="tests\get_rgb_led_test.py" />
@@ -44,16 +50,20 @@
     <Compile Include="tests\test_utils.py" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="winble\winble.cpp" />
-  </ItemGroup>
-  <ItemGroup>
     <Folder Include="conda" />
     <Folder Include="spheropy" />
     <Folder Include="tests" />
-    <Folder Include="winble" />
   </ItemGroup>
   <ItemGroup>
     <InterpreterReference Include="CondaEnv|CondaEnv|spheropy-env" />
+    <InterpreterReference Include="Global|PythonCore|3.6-32" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="winble\winble.vcxproj">
+      <Name>winble</Name>
+      <Project>{c67c4629-4d48-44f8-a213-e4b49c107d3f}</Project>
+      <Private>True</Private>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
 </Project>
