@@ -8,9 +8,10 @@ import spheropy
 class SetRgbLedTest(unittest.TestCase):
 
     def setUp(self):
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self._setUp())
+        self.sphero = None
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(None)
+        event_loop.run_until_complete(self._setUp())
 
     async def _setUp(self):
         is_connected = False
@@ -33,18 +34,22 @@ class SetRgbLedTest(unittest.TestCase):
 
     def tearDown(self):
         self.sphero.disconnect()
-        self.loop.close()
 
     def test_set_rgb_led(self):
-        self.loop.run_until_complete(self.sphero.set_rgb_led(red=0xFF))
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(None)
+        event_loop.run_until_complete(self._test_set_rgb_led())
+
+    async def _test_set_rgb_led(self):
+        await self.sphero.set_rgb_led(red=0xFF)
         time.sleep(2)
-        self.loop.run_until_complete(self.sphero.set_rgb_led(green=0xFF))
+        await self.sphero.set_rgb_led(green=0xFF)
         time.sleep(2)
-        self.loop.run_until_complete(self.sphero.set_rgb_led(blue=0xFF))
+        await self.sphero.set_rgb_led(blue=0xFF)
         time.sleep(2)
-        self.loop.run_until_complete(self.sphero.set_rgb_led(red=0xFF, blue=0xFF))
+        await self.sphero.set_rgb_led(red=0xFF, blue=0xFF)
         time.sleep(2)
-        self.loop.run_until_complete(self.sphero.set_rgb_led(0xFF, 0xFF, 0xFF))
+        await self.sphero.set_rgb_led(0xFF, 0xFF, 0xFF)
         time.sleep(2)
 
 if __name__ == "__main__":

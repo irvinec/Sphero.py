@@ -1,7 +1,7 @@
+import setuptools
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 import sys
-import setuptools
 
 # See https://github.com/pybind/python_example/blob/master/setup.py
 

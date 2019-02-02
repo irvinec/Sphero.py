@@ -6,7 +6,7 @@
     <ProjectGuid>{215b07e3-70ff-4dda-b96b-334b12af6167}</ProjectGuid>
     <ProjectHome />
     <StartupFile>tests\end_to_end_tests.py</StartupFile>
-    <SearchPath>$(PythonHome);$(ProjectDir)spheropy</SearchPath>
+    <SearchPath>spheropy</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>

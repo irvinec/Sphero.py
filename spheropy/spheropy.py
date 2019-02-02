@@ -6,6 +6,7 @@ import os
 import uuid
 import threading
 import struct
+import queue
 from collections import namedtuple
 
 try:
@@ -28,8 +29,12 @@ except Exception:
 
 # TODO: Need more parameter validation on functions and throughout.
 
+# region Sphero
+
 class Sphero(object):
     """The main class that is used for interacting with a Sphero device."""
+
+#region Sphero public members
 
     def __init__(self, default_response_timeout_in_seconds=0.5):
         self.on_collision = []
@@ -38,9 +43,12 @@ class Sphero(object):
         self._bluetooth_interface = None
         self._default_response_timeout_in_seconds = default_response_timeout_in_seconds
         self._command_sequence_number = 0x00
-        self._commands_waiting_for_response = {}
 
-        self._receive_buffer = []
+        # Message processing members
+        self._commands_waiting_for_response = {}
+        # TODO: Consider passing in a max size for the queue.
+        self._message_receive_queue = queue.Queue()
+        self._message_processing_thread = None
 
     async def connect(self,
             search_name=None,
@@ -705,6 +713,10 @@ class Sphero(object):
 
         await self._send_command(command, response_timeout_in_seconds)
 
+#endregion Sphero public members
+
+# region Sphero private members
+
     async def _send_command(self,
             command,
             response_timeout_in_seconds):
@@ -722,9 +734,7 @@ class Sphero(object):
                 response_event.set()
 
             # Register the response handler for this commands sequence number
-            assert command.sequence_number not in self._commands_waiting_for_response, \
-                ("A response handler was already registered for the sequence number {}"
-                 .format(command.sequence_number))
+            assert command.sequence_number not in self._commands_waiting_for_response, f'A response handler was already registered for the sequence number {command.sequence_number}'
             self._commands_waiting_for_response[command.sequence_number] = handle_response
 
         self._bluetooth_interface.send(command.bytes)
@@ -743,52 +753,19 @@ class Sphero(object):
         return response_packet
 
     def _handle_data_received(self, received_data):
-        # TODO: we should use a queue.Queue here instead of buffer.
-        self._receive_buffer.extend(received_data)
-        response_packet = None
-        while len(self._receive_buffer) >= _MIN_PACKET_LENGTH:
-            try:
-                response_packet = _ResponsePacket(self._receive_buffer)
-                # we have a valid response to handle
-                # break out of the inner while loop to handle
-                # the response.
-                break
-            except BufferNotLongEnoughError:
-                # break out of inner loop and wait till we get more data.
-                break
-            except PacketParseError:
-                # There is an error in the packet format
-                # remove one byte from the buffer and try again.
-                self._receive_buffer.pop(0)
-                continue
-
-        if response_packet is not None:
-            if response_packet.is_async:
-                if response_packet.id_code is _ID_CODE_COLLISION_DETECTED:
-                    collision_info = _parse_collision_info(response_packet.data)
-                    for func in self.on_collision:
-                        # Schedule the callback on its own thread.
-                        # TODO: there is probably a more asyncio way of doing this, but do we care?
-                        # Maybe we can run the function on the main thread's event loop?
-                        # TODO: Refactor kicking off callback in seperate thread to a function
-                        callback_thread = threading.Thread(target=func, args=[collision_info])
-                        callback_thread.daemon = True
-                        callback_thread.start()
-                elif response_packet.id_code is _ID_CODE_POWER_NOTIFICATION:
-                    power_state = response_packet.data[0]
-                    for func in self.on_power_state_change:
-                        callback_thread = threading.Thread(target=func, args=[power_state])
-                        callback_thread.daemon = True
-                        callback_thread.start()
-            else:
-                # for ACK/sync responses we only need to call the registered callback.
-                sequence_number = response_packet.sequence_number
-                if sequence_number in self._commands_waiting_for_response:
-                    self._commands_waiting_for_response[sequence_number](response_packet)
-                    # NOTE: it is up to the callback/waiting function to remove the handler.
-
-            # remove the packet we just handled
-            del self._receive_buffer[:response_packet.packet_length]
+        self._message_receive_queue.put(received_data)
+        if self._message_processing_thread is None or not self._message_processing_thread.is_alive():
+            self._message_processing_thread = threading.Thread(
+                target=_process_messages,
+                args=
+                    [
+                        self._message_receive_queue,
+                        self._commands_waiting_for_response,
+                        self.on_collision,
+                        self.on_power_state_change
+                    ]
+            )
+            self._message_processing_thread.start()
 
     def _get_and_increment_command_sequence_number(self):
         result = self._command_sequence_number
@@ -800,6 +777,75 @@ class Sphero(object):
             self._command_sequence_number = 0x00
 
         return result
+
+#endregion Sphero private members
+
+def _process_messages(
+        message_queue,
+        commands_waiting_for_response,
+        on_collision_callbacks,
+        on_power_state_change_callbacks):
+    """Process messages received.
+
+    Parses the messages recieved 
+    """
+    message = []
+    while not message_queue.empty():
+        response_packet = None
+        message_part = message_queue.get()
+        if message_part is None:
+            return
+
+        message.extend(message_part)
+        while len(message) >= _MIN_PACKET_LENGTH:
+            try:
+                response_packet = _ResponsePacket(message)
+                # we have a valid response to handle
+                # break out of the inner while loop to handle
+                # the response.
+                break
+            except BufferNotLongEnoughError:
+                # break out of inner loop and wait till we get more data.
+                # Technically we are done processing that task so tell the queue.
+                message_queue.task_done()
+                break
+            except PacketParseError:
+                # There is an error in the packet format
+                # remove one byte from the buffer and try again.
+                message.pop(0)
+                continue
+
+        if response_packet is not None:
+            if response_packet.is_async:
+                if response_packet.id_code is _ID_CODE_COLLISION_DETECTED:
+                    collision_info = _parse_collision_info(response_packet.data)
+                    for func in on_collision_callbacks:
+                        # Schedule the callback on its own thread.
+                        # TODO: there is probably a more asyncio way of doing this, but do we care?
+                        # Maybe we can run the function on the main thread's event loop?
+                        # TODO: Refactor kicking off callback in seperate thread to a function
+                        callback_thread = threading.Thread(target=func, args=[collision_info])
+                        callback_thread.daemon = True
+                        callback_thread.start()
+                elif response_packet.id_code is _ID_CODE_POWER_NOTIFICATION:
+                    power_state = response_packet.data[0]
+                    for func in on_power_state_change_callbacks:
+                        callback_thread = threading.Thread(target=func, args=[power_state])
+                        callback_thread.daemon = True
+                        callback_thread.start()
+            else:
+                # for ACK/synchronous responses we only need to call the registered callback.
+                sequence_number = response_packet.sequence_number
+                if sequence_number in commands_waiting_for_response:
+                    # TODO: check to make sure handler is callable before invoking.
+                    commands_waiting_for_response[sequence_number](response_packet)
+                    # NOTE: it is up to the callback/waiting function to remove the handler.
+
+            # Remove the packet we just handled
+            del message[:response_packet.packet_length]
+            message_queue.task_done()
+
+#endregion Sphero
 
 #region Public Exceptions
 

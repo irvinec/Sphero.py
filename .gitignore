@@ -115,3 +115,4 @@ venv.bak/
 /winble/Debug
 /winble/x64/Debug
 /x64/Debug
+/winble/Win32/Debug
