@@ -1,56 +1,27 @@
 """
 """
-import unittest
+
 import asyncio
 import time
 import spheropy
+from tests.test_utils import parse_args
 
-class SetRgbLedTest(unittest.TestCase):
+async def main():
+    script_args = parse_args()
+    sphero = spheropy.Sphero()
+    await sphero.connect(num_retry_attempts=3, use_ble=script_args.use_ble)
 
-    def setUp(self):
-        self.sphero = None
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(None)
-        event_loop.run_until_complete(self._setUp())
-
-    async def _setUp(self):
-        is_connected = False
-        self.sphero = spheropy.Sphero()
-        try:
-            await self.sphero.connect(num_retry_attempts=3)
-            is_connected = True
-        except Exception:
-            pass
-
-        if not is_connected:
-            try:
-                await self.sphero.connect(num_retry_attempts=3, use_ble=True)
-                is_connected = True
-            except Exception:
-                pass
-
-        if not is_connected:
-            raise RuntimeError('Could not connect to Sphero.')
-
-    def tearDown(self):
-        self.sphero.disconnect()
-
-    def test_set_rgb_led(self):
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(None)
-        event_loop.run_until_complete(self._test_set_rgb_led())
-
-    async def _test_set_rgb_led(self):
-        await self.sphero.set_rgb_led(red=0xFF)
-        time.sleep(2)
-        await self.sphero.set_rgb_led(green=0xFF)
-        time.sleep(2)
-        await self.sphero.set_rgb_led(blue=0xFF)
-        time.sleep(2)
-        await self.sphero.set_rgb_led(red=0xFF, blue=0xFF)
-        time.sleep(2)
-        await self.sphero.set_rgb_led(0xFF, 0xFF, 0xFF)
-        time.sleep(2)
+    await sphero.set_rgb_led(red=0xFF)
+    time.sleep(2)
+    await sphero.set_rgb_led(green=0xFF)
+    time.sleep(2)
+    await sphero.set_rgb_led(blue=0xFF)
+    time.sleep(2)
+    await sphero.set_rgb_led(red=0xFF, blue=0xFF)
+    time.sleep(2)
+    await sphero.set_rgb_led(0xFF, 0xFF, 0xFF)
+    time.sleep(2)
 
 if __name__ == "__main__":
-    unittest.main()
+    main_loop = asyncio.get_event_loop()
+    main_loop.run_until_complete(main())
