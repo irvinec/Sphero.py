@@ -7,6 +7,7 @@ import uuid
 import threading
 import struct
 import queue
+import enum
 from collections import namedtuple
 
 try:
@@ -797,53 +798,78 @@ def _process_messages(
             return
 
         message.extend(message_part)
-        while len(message) >= _MIN_PACKET_LENGTH:
-            try:
-                response_packet = _ResponsePacket(message)
-                # we have a valid response to handle
-                # break out of the inner while loop to handle
-                # the response.
-                break
-            except BufferNotLongEnoughError:
-                # break out of inner loop and wait till we get more data.
-                # Technically we are done processing that task so tell the queue.
-                message_queue.task_done()
-                break
-            except PacketParseError:
-                # There is an error in the packet format
-                # remove one byte from the buffer and try again.
-                message.pop(0)
-                continue
-
+        response_packet = _parse_message(message)
         if response_packet is not None:
             if response_packet.is_async:
-                if response_packet.id_code is _ID_CODE_COLLISION_DETECTED:
-                    collision_info = _parse_collision_info(response_packet.data)
-                    for func in on_collision_callbacks:
-                        # Schedule the callback on its own thread.
-                        # TODO: there is probably a more asyncio way of doing this, but do we care?
-                        # Maybe we can run the function on the main thread's event loop?
-                        # TODO: Refactor kicking off callback in seperate thread to a function
-                        callback_thread = threading.Thread(target=func, args=[collision_info])
-                        callback_thread.daemon = True
-                        callback_thread.start()
-                elif response_packet.id_code is _ID_CODE_POWER_NOTIFICATION:
-                    power_state = response_packet.data[0]
-                    for func in on_power_state_change_callbacks:
-                        callback_thread = threading.Thread(target=func, args=[power_state])
-                        callback_thread.daemon = True
-                        callback_thread.start()
+                _handle_async_response(
+                    response_packet,
+                    on_collision_callbacks,
+                    on_power_state_change_callbacks
+                )
             else:
-                # for ACK/synchronous responses we only need to call the registered callback.
-                sequence_number = response_packet.sequence_number
-                if sequence_number in commands_waiting_for_response:
-                    # TODO: check to make sure handler is callable before invoking.
-                    commands_waiting_for_response[sequence_number](response_packet)
-                    # NOTE: it is up to the callback/waiting function to remove the handler.
+                _handle_sync_response(
+                    response_packet,
+                    commands_waiting_for_response
+                )
 
             # Remove the packet we just handled
             del message[:response_packet.packet_length]
-            message_queue.task_done()
+
+        message_queue.task_done()
+
+def _parse_message(message):
+    while len(message) >= _MIN_PACKET_LENGTH:
+        response_packet = _ResponsePacket(message)
+        if response_packet.status == _ResponsePacketStatus.VALID:
+            # we have a valid response to handle
+            # break out of the inner while loop to handle
+            # the response.
+            return response_packet
+        elif response_packet.status == _ResponsePacketStatus.NOT_ENOUGH_BUFFER:
+            # Return and wait to get more data.
+            return None
+        else:
+            # There is an error in the packet format
+            # remove one byte from the buffer and try again.
+            message.pop(0)
+            continue
+
+    return None
+
+def _handle_async_response(
+        response_packet,
+        on_collision_callbacks,
+        on_power_state_change_callbacks):
+    """
+    """
+    if response_packet.id_code is _ID_CODE_COLLISION_DETECTED:
+        collision_info = _parse_collision_info(response_packet.data)
+        for func in on_collision_callbacks:
+            # Schedule the callback on its own thread.
+            # TODO: there is probably a more asyncio way of doing this, but do we care?
+            # Maybe we can run the function on the main thread's event loop?
+            # TODO: Refactor kicking off callback in seperate thread to a function
+            callback_thread = threading.Thread(target=func, args=[collision_info])
+            callback_thread.daemon = True
+            callback_thread.start()
+    elif response_packet.id_code is _ID_CODE_POWER_NOTIFICATION:
+        power_state = response_packet.data[0]
+        for func in on_power_state_change_callbacks:
+            callback_thread = threading.Thread(target=func, args=[power_state])
+            callback_thread.daemon = True
+            callback_thread.start()
+
+def _handle_sync_response(
+        response_packet,
+        commands_waiting_for_response):
+    """
+    """
+    # for ACK/synchronous responses we only need to call the registered callback.
+    sequence_number = response_packet.sequence_number
+    if sequence_number in commands_waiting_for_response:
+        # TODO: check to make sure handler is callable before invoking.
+        commands_waiting_for_response[sequence_number](response_packet)
+        # NOTE: it is up to the callback/waiting function to remove the handler.
 
 #endregion Sphero
 
@@ -859,33 +885,6 @@ class CommandTimedOutError(SpheroError):
 
     def __init__(self, message="Command timeout reached."):
         super().__init__(message)
-
-class PacketError(SpheroError):
-    """
-    """
-
-    def __init__(self, message="Error related to a packet occured."):
-        super().__init__(message)
-
-class PacketParseError(PacketError):
-    """
-    """
-
-    def __init__(self, message="Error parsing a packet."):
-        super().__init__(message)
-
-class BufferNotLongEnoughError(PacketParseError):
-    """
-    """
-
-    def __init__(
-            self,
-            expected_length,
-            actual_length,
-            message="Buffer not long enough for packet."):
-        super().__init__(message)
-        self.expected_length = expected_length
-        self.actual_length = actual_length
 
 #endregion
 
@@ -1678,6 +1677,13 @@ class _ClientCommandPacket(object):
         """
         return self._wait_for_response
 
+class _ResponsePacketStatus(enum.Enum):
+    VALID = enum.auto()
+    NOT_ENOUGH_BUFFER = enum.auto()
+    INVALID_DATA = enum.auto()
+    INCORRECT_LENGTH = enum.auto()
+
+
 class _ResponsePacket(object):
     """Represents a response packet from a Sphero to the client
 
@@ -1686,13 +1692,6 @@ class _ResponsePacket(object):
     Args:
         buffer (list): the raw byte buffer to
         try and parse as a packet
-
-    Raises:
-        PacketParseError:
-            When first bytes in buffer are not a valid packet.
-        BufferNotLongEnoughError:
-            When the start of the packet is valid,
-            but the whole packet was not passed in.
     """
     _START_OF_PACKET_1_INDEX = 0
     _START_OF_PACKET_2_INDEX = 1
@@ -1718,14 +1717,15 @@ class _ResponsePacket(object):
 
     def __init__(self, buffer):
         assert len(buffer) >= _MIN_PACKET_LENGTH, "Buffer is less than the minimum packet length"
-
+        self.status = _ResponsePacketStatus.VALID
         self._message_response_code = 0x00
         self._sequence_number = 0x00
         self._id_code = 0x00
 
         self._start_of_packet_byte_1 = buffer[self._START_OF_PACKET_1_INDEX]
         if self._start_of_packet_byte_1 != self._START_OF_PACKET_1:
-            raise PacketParseError(f'Invalid Start of packet byte: {self._start_of_packet_byte_1}')
+            self.status = _ResponsePacketStatus.INVALID_DATA
+            return
 
         self._start_of_packet_byte_2 = buffer[self._START_OF_PACKET_2_INDEX]
 
@@ -1741,20 +1741,24 @@ class _ResponsePacket(object):
             self._data_length = buffer[self._DATA_LENGTH_INDEX]
 
         if self._data_length < self._MIN_DATA_LENGTH:
-            raise PacketParseError("Found invalid data length (less than 1)")
+            self.status = _ResponsePacketStatus.INCORRECT_LENGTH
+            return
 
         if self._data_length + _MIN_PACKET_LENGTH - 1 > len(buffer):
-            raise BufferNotLongEnoughError(self._data_length + _MIN_PACKET_LENGTH - 1, len(buffer))
+            self.status = _ResponsePacketStatus.NOT_ENOUGH_BUFFER
+            return
 
         checksum_index = self._checksum_index
         self._data = buffer[self._DATA_START_INDEX:checksum_index]
         self._checksum = buffer[checksum_index]
 
         if not self._is_data_length_valid:
-            raise PacketParseError("Length of data does not match data length byte.")
+            self.status = _ResponsePacketStatus.INCORRECT_LENGTH
+            return
 
         if self._checksum is not _compute_checksum(buffer[:checksum_index]):
-            raise PacketParseError("Checksum is not correct")
+            self.status = _ResponsePacketStatus.INVALID_DATA
+            return
 
     @property
     def is_async(self):
