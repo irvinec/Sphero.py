@@ -1033,9 +1033,12 @@ class BleInterface(BluetoothInterfaceBase):
     DEFAULT_SEARCH_NAME = 'SK'
     DEFAULT_PORT = None
 
+    BleAdapterType = enum.Enum('BleAdapterType', 'PYGATT WINBLE')
+
     def __init__(self, search_name=None, address=None, port=None):
         super().__init__(search_name, address, port)
         self._adapter = None
+        self._adapter_type = None
         self._device = None
 
     def connect(self, num_retry_attempts=1):
@@ -1049,10 +1052,16 @@ class BleInterface(BluetoothInterfaceBase):
                     continue
 
             if self._address is not None:
-                self._device = self._adapter.connect(
-                    address=self._address,
-                    address_type=pygatt.BLEAddressType.random # TODO: This won't work if pygatt is not available.
-                )
+                if self._adapter_type is BleAdapterType.PYGATT:
+                    self._device = self._adapter.connect(
+                        address=self._address,
+                        address_type=pygatt.BLEAddressType.random
+                    )
+                elif self._adapter_type is BleAdapterType.WINBLE:
+                    self._device = self._adapter.connect(
+                        address=self._address
+                    )
+
                 self._turn_on_dev_mode()
                 self._device.subscribe(self._ROBOT_SERVICE_RESPONSE, self._response_callback)
                 is_connected = True
@@ -1118,7 +1127,7 @@ class BleInterface(BluetoothInterfaceBase):
             try:
                 adapter = pygatt.BGAPIBackend(serial_port=self._port)
                 adapter.start()
-                adapter_address_type = pygatt.BLEAddressType.random
+                self._adapter_type = BleAdapterType.PYGATT
                 found_adapter = True
             except pygatt.exceptions.NotConnectedError:
                 pass
@@ -1129,8 +1138,7 @@ class BleInterface(BluetoothInterfaceBase):
                 try:
                     adapter = winble.WinBleAdapter()
                     adapter.start()
-                    # TODO: create an address type?
-                    adapter_address_type = None
+                    self._adapter_type = BleAdapterType.WINBLE
                     found_adapter = True
                 except Exception:
                     pass
@@ -1138,7 +1146,7 @@ class BleInterface(BluetoothInterfaceBase):
                 try:
                     adapter = pygatt.backends.GATTToolBackend()
                     adapter.start()
-                    adapter_address_type = pygatt.BLEAddressType.random
+                    self._adapter_type = BleAdapterType.PYGATT
                     found_adapter = True
                 except pygatt.exceptions.NotConnectedError:
                     pass
