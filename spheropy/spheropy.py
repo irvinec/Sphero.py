@@ -1085,10 +1085,7 @@ class BleInterface(BluetoothInterfaceBase):
         if self._device is not None:
             # TODO: need to understand how ble ack works
             # so we know if we should set the wait_for_response param.
-            if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
-                self._device.char_write(self._ROBOT_SERVICE_CONTROL, data)
-            elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
-                self._device.char_write(self._ROBOT_SERVICE_CONTROL.bytes, data)
+            self._char_write(self._ROBOT_SERVICE_CONTROL, data)
 
     def disconnect(self):
         super().disconnect()
@@ -1113,24 +1110,22 @@ class BleInterface(BluetoothInterfaceBase):
         and to receive data from the Sphero.
         """
         if self._device is not None:
-            if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
-                self._device.char_write(
-                    self._BLE_SERVICE_ANTI_DOS,
-                    bytes([ord(c) for c in self._ANTI_DOS_MESSAGE]))
-                self._device.char_write(
-                    self._BLE_SERVICE_TX_POWER,
-                    bytes([self._TX_POWER_VALUE]))
-                # Sending 0x01 to the wake service wakes the sphero.
-                self._device.char_write(self._BLE_SERVICE_WAKE, bytes([0x01]))
-            elif self._adapter_type == BleInterface.BleAdapterType.WINBLE:
-                self._device.char_write(
-                    self._BLE_SERVICE_ANTI_DOS.bytes,
-                    bytes([ord(c) for c in self._ANTI_DOS_MESSAGE]))
-                self._device.char_write(
-                    self._BLE_SERVICE_TX_POWER.bytes,
-                    bytes([self._TX_POWER_VALUE]))
-                # Sending 0x01 to the wake service wakes the sphero.
-                self._device.char_write(self._BLE_SERVICE_WAKE.bytes, bytes([0x01]))
+            self._char_write(
+                self._BLE_SERVICE_ANTI_DOS,
+                [ord(c) for c in self._ANTI_DOS_MESSAGE]
+            )
+            self._char_write(
+                self._BLE_SERVICE_TX_POWER,
+                [self._TX_POWER_VALUE]
+            )
+            # Sending 0x01 to the wake service wakes the sphero.
+            self._char_write(self._BLE_SERVICE_WAKE, [0x01])
+
+    def _char_write(self, charId, data):
+        if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
+            self._device.char_write(charId, bytes(data))
+        elif self._adapter_type == BleInterface.BleAdapterType.WINBLE:
+            self._device.char_write(charId.bytes, bytes(data))
 
     def _find_adapter(self):
         """

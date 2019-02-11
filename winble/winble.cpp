@@ -13,6 +13,8 @@
 using namespace winrt;
 using namespace winrt::Windows::Devices::Enumeration;
 using namespace winrt::Windows::Devices::Bluetooth;
+using namespace winrt::Windows::Devices::Bluetooth::GenericAttributeProfile;
+using namespace winrt::Windows::Storage::Streams;
 namespace py = pybind11;
 
 const std::vector<hstring> g_requestedProperties
@@ -42,7 +44,7 @@ DeviceWatcher CreateDeviceWatcher()
     init_apartment();
     return DeviceInformation::CreateWatcher(
                //Windows::Devices::Bluetooth::BluetoothLEDevice::GetDeviceSelectorFromPairingState(false),
-        BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(Windows::Devices::Bluetooth::BluetoothConnectionStatus::Disconnected),
+        BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Disconnected),
         g_requestedProperties,
         DeviceInformationKind::AssociationEndpoint
     );
@@ -55,6 +57,15 @@ guid StringToGuid(const std::string& guidString)
     return result;
 }
 
+guid BytesToGuid(const std::string& guidBytes)
+{
+    std::vector<uint8_t> guidVector(guidBytes.begin(), guidBytes.end());
+    DataWriter guidWriter;
+    guidWriter.WriteBytes(guidVector);
+    DataReader guidReader = DataReader::FromBuffer(guidWriter.DetachBuffer());
+    return guidReader.ReadGuid();
+}
+
 struct WinBleDevice
 {
     WinBleDevice(BluetoothLEDevice&& device)
@@ -64,32 +75,36 @@ struct WinBleDevice
 
     void WriteToCharacteristic(std::string characteristicId, std::string data)
     {
-        Windows::Storage::Streams::DataWriter writer;
+        DataWriter writer;
         std::vector<uint8_t> dataBytes(data.cbegin(), data.cend());
         writer.WriteBytes(dataBytes);
 
-        guid characteristicGuid
+        guid characteristicGuid{ BytesToGuid(characteristicId) };
+        GattDeviceServicesResult getServicesResult
         {
-            StringToGuid(characteristicId)
+            m_device.GetGattServicesAsync(BluetoothCacheMode::Uncached).get()
         };
 
-        GenericAttributeProfile::GattDeviceServicesResult getServicesResult
-        {
-            m_device.GetGattServicesAsync().get()
-        };
-
-        if (getServicesResult.Status() == GenericAttributeProfile::GattCommunicationStatus::Success)
+        if (getServicesResult.Status() == GattCommunicationStatus::Success)
         {
             auto services = getServicesResult.Services();
             for (const auto& service : services)
             {
-                auto characteristics = service.GetCharacteristics(characteristicGuid);
-                if (characteristics.Size() > 0)
+                GattCharacteristicsResult characteristicsResult
                 {
+                    service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode::Uncached).get()
+                };
+                if (characteristicsResult.Status() == GattCommunicationStatus::Success
+                    && characteristicsResult.Characteristics().Size() > 0)
+                {
+                    GattCharacteristic characteristic
+                    {
+                        characteristicsResult.Characteristics().GetAt(0)
+                    };
                     // Assume for now that we only got one characteristic.
-                    auto result = characteristics.GetAt(0).WriteValueAsync(writer.DetachBuffer()).get();
+                    auto result = characteristic.WriteValueAsync(writer.DetachBuffer()).get();
 
-                    if (result == GenericAttributeProfile::GattCommunicationStatus::Success)
+                    if (result == GattCommunicationStatus::Success)
                     {
                         // Successfully wrote to device
                     }
@@ -102,17 +117,61 @@ struct WinBleDevice
         }
     }
 
-    void Subscribe(py::bytes characteristicId, py::function eventHandler)
+    void Subscribe(std::string characteristicId, py::function eventHandler)
     {
-        // TODO: implement subscribe.
         guid characteristicGuid
         {
-            StringToGuid(characteristicId)
+            BytesToGuid(characteristicId)
         };
+
+        GattDeviceServicesResult getServicesResult
+        {
+            m_device.GetGattServicesAsync(BluetoothCacheMode::Uncached).get()
+        };
+
+        if (getServicesResult.Status() == GattCommunicationStatus::Success)
+        {
+            auto services = getServicesResult.Services();
+            for (const auto& service : services)
+            {
+                GattCharacteristicsResult characteristicsResult
+                {
+                    service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode::Uncached).get()
+                };
+                if (characteristicsResult.Status() == GattCommunicationStatus::Success
+                    && characteristicsResult.Characteristics().Size() > 0)
+                {
+                    GattCharacteristic characteristic
+                    {
+                        characteristicsResult.Characteristics().GetAt(0)
+                    };
+
+                    event_token valueChangedEventToken = characteristic.ValueChanged(
+                        [&eventHandler](
+                            const GattCharacteristic&,
+                            GattValueChangedEventArgs valueChangedEventArgs
+                        )
+                        {
+                            auto reader = DataReader::FromBuffer(valueChangedEventArgs.CharacteristicValue());
+                            std::vector<uint8_t> data;
+                            // TODO: may need to read as string and convert to py::bytes
+                            reader.ReadBytes(data);
+                            eventHandler(data);
+                        }
+                    );
+                }
+            }
+        }
+        else
+        {
+            throw std::exception();
+        }
     }
 
 private:
-    Windows::Devices::Bluetooth::BluetoothLEDevice m_device;
+    // TODO: save a list of all characteristics and search through that instead.
+    // Be sure to us Uncached mode and see if that helps.
+    BluetoothLEDevice m_device;
 };
 
 struct WinBleAdapter
