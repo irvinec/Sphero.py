@@ -1016,6 +1016,8 @@ class BluetoothInterface(BluetoothInterfaceBase):
 
         return found_device_address
 
+# TODO: Now this class is a mess with differnt adapter contracts.
+# Try to cleanup a bit.
 class BleInterface(BluetoothInterfaceBase):
     """Bluetooth Low Energy (BLE) Interface"""
 
@@ -1052,18 +1054,20 @@ class BleInterface(BluetoothInterfaceBase):
                     continue
 
             if self._address is not None:
-                if self._adapter_type is BleAdapterType.PYGATT:
+                if self._adapter_type is BleInterface.BleAdapterType.PYGATT:
                     self._device = self._adapter.connect(
                         address=self._address,
                         address_type=pygatt.BLEAddressType.random
                     )
-                elif self._adapter_type is BleAdapterType.WINBLE:
-                    self._device = self._adapter.connect(
-                        address=self._address
-                    )
+                elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
+                    self._device = self._adapter.connect(self._address)
 
                 self._turn_on_dev_mode()
-                self._device.subscribe(self._ROBOT_SERVICE_RESPONSE, self._response_callback)
+                if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
+                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE, self._response_callback)
+                elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
+                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE.bytes, self._response_callback)
+
                 is_connected = True
                 break
 
@@ -1081,7 +1085,10 @@ class BleInterface(BluetoothInterfaceBase):
         if self._device is not None:
             # TODO: need to understand how ble ack works
             # so we know if we should set the wait_for_response param.
-            self._device.char_write(self._ROBOT_SERVICE_CONTROL, data)
+            if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
+                self._device.char_write(self._ROBOT_SERVICE_CONTROL, data)
+            elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
+                self._device.char_write(self._ROBOT_SERVICE_CONTROL.bytes, data)
 
     def disconnect(self):
         super().disconnect()
@@ -1106,39 +1113,52 @@ class BleInterface(BluetoothInterfaceBase):
         and to receive data from the Sphero.
         """
         if self._device is not None:
-            self._device.char_write(
-                self._BLE_SERVICE_ANTI_DOS,
-                bytes([ord(c) for c in self._ANTI_DOS_MESSAGE]))
-            self._device.char_write(
-                self._BLE_SERVICE_TX_POWER,
-                bytes([self._TX_POWER_VALUE]))
-            # Sending 0x01 to the wake service wakes the sphero.
-            self._device.char_write(self._BLE_SERVICE_WAKE, bytes([0x01]))
+            if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
+                self._device.char_write(
+                    self._BLE_SERVICE_ANTI_DOS,
+                    bytes([ord(c) for c in self._ANTI_DOS_MESSAGE]))
+                self._device.char_write(
+                    self._BLE_SERVICE_TX_POWER,
+                    bytes([self._TX_POWER_VALUE]))
+                # Sending 0x01 to the wake service wakes the sphero.
+                self._device.char_write(self._BLE_SERVICE_WAKE, bytes([0x01]))
+            elif self._adapter_type == BleInterface.BleAdapterType.WINBLE:
+                self._device.char_write(
+                    self._BLE_SERVICE_ANTI_DOS.bytes,
+                    bytes([ord(c) for c in self._ANTI_DOS_MESSAGE]))
+                self._device.char_write(
+                    self._BLE_SERVICE_TX_POWER.bytes,
+                    bytes([self._TX_POWER_VALUE]))
+                # Sending 0x01 to the wake service wakes the sphero.
+                self._device.char_write(self._BLE_SERVICE_WAKE.bytes, bytes([0x01]))
 
     def _find_adapter(self):
         """
         """
         adapter = None
-        adapter_address_type = None
+        adapter_type = None
         found_adapter = False
 
+        # Try pygatt BGAPI for all platforms first.
         global HAS_PYGATT
         if HAS_PYGATT:
             try:
                 adapter = pygatt.BGAPIBackend(serial_port=self._port)
                 adapter.start()
-                self._adapter_type = BleAdapterType.PYGATT
+                adapter_type = BleInterface.BleAdapterType.PYGATT
                 found_adapter = True
             except pygatt.exceptions.NotConnectedError:
                 pass
 
+        # If we couldn't find the adapter,
+        # Try a platform specific adapter.
         if not found_adapter:
             global HAS_WINBLE
             if _is_windows() and HAS_WINBLE:
                 try:
                     adapter = winble.WinBleAdapter()
                     adapter.start()
-                    self._adapter_type = BleAdapterType.WINBLE
+                    adapter_type = BleInterface.BleAdapterType.WINBLE
                     found_adapter = True
                 except Exception:
                     pass
@@ -1146,14 +1166,14 @@ class BleInterface(BluetoothInterfaceBase):
                 try:
                     adapter = pygatt.backends.GATTToolBackend()
                     adapter.start()
-                    self._adapter_type = BleAdapterType.PYGATT
+                    adapter_type = BleInterface.BleAdapterType.PYGATT
                     found_adapter = True
                 except pygatt.exceptions.NotConnectedError:
                     pass
 
         if found_adapter:
             self._adapter = adapter
-            self._adapter_address_type = adapter_address_type
+            self._adapter_type = adapter_type
 
         return found_adapter
 

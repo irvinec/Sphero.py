@@ -2,13 +2,17 @@
 #include <unordered_set>
 #include <condition_variable>
 #include <chrono>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Devices.Bluetooth.h>
+#include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
 #include <winrt/Windows.Devices.Enumeration.h>
 
 // Link to umbrella lib.
 #pragma comment(lib, "windowsapp")
 
 using namespace winrt;
+using namespace winrt::Windows::Devices::Enumeration;
+using namespace winrt::Windows::Devices::Bluetooth;
 namespace py = pybind11;
 
 const std::vector<hstring> g_requestedProperties
@@ -18,21 +22,93 @@ const std::vector<hstring> g_requestedProperties
     L"System.Devices.Aep.Bluetooth.Le.AddressType"
 };
 
-std::string GetDeviceAddress(const Windows::Devices::Enumeration::DeviceInformation& deviceInfo)
+std::string GetDeviceAddress(const DeviceInformation& deviceInfo)
 {
     return to_string(unbox_value<hstring>(deviceInfo.Properties().Lookup(L"System.Devices.Aep.DeviceAddress")));
 }
 
+uint64_t MacAddressStringToUint(std::string macAddress)
+{
+    // Remove colons if there are any
+    macAddress.erase(std::remove(macAddress.begin(), macAddress.end(), ':'), macAddress.end());
+
+    // Convert to uint64_t
+    return strtoul(macAddress.c_str(), NULL, 16);
+}
+
+DeviceWatcher CreateDeviceWatcher()
+{
+    // We need to init the thread apartment before creating the watcher
+    init_apartment();
+    return DeviceInformation::CreateWatcher(
+               //Windows::Devices::Bluetooth::BluetoothLEDevice::GetDeviceSelectorFromPairingState(false),
+        BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(Windows::Devices::Bluetooth::BluetoothConnectionStatus::Disconnected),
+        g_requestedProperties,
+        DeviceInformationKind::AssociationEndpoint
+    );
+}
+
+guid StringToGuid(const std::string& guidString)
+{
+    guid result;
+    WINRT_IIDFromString(std::wstring(guidString.begin(), guidString.end()).data(), &result);
+    return result;
+}
+
 struct WinBleDevice
 {
-    WinBleDevice(Windows::Devices::Bluetooth::BluetoothLEDevice&& device)
+    WinBleDevice(BluetoothLEDevice&& device)
         : m_device{ std::move(device) }
     {
     }
 
-    void WriteToCharacteristic(std::string uuid, py::bytes data)
+    void WriteToCharacteristic(std::string characteristicId, std::string data)
     {
+        Windows::Storage::Streams::DataWriter writer;
+        std::vector<uint8_t> dataBytes(data.cbegin(), data.cend());
+        writer.WriteBytes(dataBytes);
 
+        guid characteristicGuid
+        {
+            StringToGuid(characteristicId)
+        };
+
+        GenericAttributeProfile::GattDeviceServicesResult getServicesResult
+        {
+            m_device.GetGattServicesAsync().get()
+        };
+
+        if (getServicesResult.Status() == GenericAttributeProfile::GattCommunicationStatus::Success)
+        {
+            auto services = getServicesResult.Services();
+            for (const auto& service : services)
+            {
+                auto characteristics = service.GetCharacteristics(characteristicGuid);
+                if (characteristics.Size() > 0)
+                {
+                    // Assume for now that we only got one characteristic.
+                    auto result = characteristics.GetAt(0).WriteValueAsync(writer.DetachBuffer()).get();
+
+                    if (result == GenericAttributeProfile::GattCommunicationStatus::Success)
+                    {
+                        // Successfully wrote to device
+                    }
+                    else
+                    {
+                        throw std::exception("WinBleDevice: Error sending data to bluetooth device.", static_cast<int>(result));
+                    }
+                }
+            }
+        }
+    }
+
+    void Subscribe(py::bytes characteristicId, py::function eventHandler)
+    {
+        // TODO: implement subscribe.
+        guid characteristicGuid
+        {
+            StringToGuid(characteristicId)
+        };
     }
 
 private:
@@ -42,15 +118,7 @@ private:
 struct WinBleAdapter
 {
     WinBleAdapter()
-        : m_deviceWatcher
-        {
-            Windows::Devices::Enumeration::DeviceInformation::CreateWatcher(
-                //Windows::Devices::Bluetooth::BluetoothLEDevice::GetDeviceSelectorFromPairingState(false),
-                Windows::Devices::Bluetooth::BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(Windows::Devices::Bluetooth::BluetoothConnectionStatus::Disconnected),
-                g_requestedProperties,
-                Windows::Devices::Enumeration::DeviceInformationKind::AssociationEndpoint
-            )
-        }
+        : m_deviceWatcher{ CreateDeviceWatcher() }
     {
         init_apartment();
     }
@@ -63,6 +131,12 @@ struct WinBleAdapter
 
     void Start()
     {
+        // Do nothing if the watcher is already started.
+        if (m_deviceWatcher.Status() == Windows::Devices::Enumeration::DeviceWatcherStatus::Started)
+        {
+            return;
+        }
+
         // Register event handlers before starting the watcher.
         // Added, Updated and Removed are required to get all nearby devices
         m_addedEventToken = m_deviceWatcher.Added(
@@ -122,13 +196,10 @@ struct WinBleAdapter
                 const Windows::Foundation::IInspectable&
             )
             {
-                // TODO: we won't stop here
-                //deviceWatcher.Stop();
                 m_enumerationCompletedEvent.notify_all();
             }
         );
 
-        // Start the watcher.
         m_deviceWatcher.Start();
     }
 
@@ -175,8 +246,12 @@ struct WinBleAdapter
         }
         else
         {
-            // TODO: add message to exception
-            throw std::exception();
+            Windows::Devices::Bluetooth::BluetoothLEDevice device
+            {
+                Windows::Devices::Bluetooth::BluetoothLEDevice::FromBluetoothAddressAsync(MacAddressStringToUint(address)).get()
+            };
+
+            return { std::move(device) };
         }
     }
 
@@ -199,7 +274,8 @@ PYBIND11_MODULE(winble, m)
         .def("connect", &WinBleAdapter::Connect);
 
     py::class_<WinBleDevice>(m, "WinBleDevice")
-        .def("write_char", &WinBleDevice::WriteToCharacteristic);
+        .def("char_write", &WinBleDevice::WriteToCharacteristic)
+        .def("subscribe", &WinBleDevice::Subscribe);
 
     m.doc() = "Windows BLE Library";
 
