@@ -6,6 +6,7 @@
 #include <winrt/Windows.Devices.Bluetooth.h>
 #include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
 #include <winrt/Windows.Devices.Enumeration.h>
+#include <winrt/Windows.Security.Cryptography.h>
 #include <winrt/Windows.Storage.Streams.h>
 
 // Link to umbrella lib.
@@ -15,6 +16,7 @@ using namespace winrt;
 using namespace winrt::Windows::Devices::Enumeration;
 using namespace winrt::Windows::Devices::Bluetooth;
 using namespace winrt::Windows::Devices::Bluetooth::GenericAttributeProfile;
+using namespace winrt::Windows::Security::Cryptography;
 using namespace winrt::Windows::Storage::Streams;
 namespace py = pybind11;
 
@@ -182,22 +184,13 @@ struct WinBleDevice
                 GattValueChangedEventArgs valueChangedEventArgs
             )
             {
-                auto reader = DataReader::FromBuffer(valueChangedEventArgs.CharacteristicValue());
-                hstring data = reader.ReadString(1024);
-                if (!data.empty())
-                {
-                    py::bytes dataAsPyType(to_string(data));
-                    eventHandler(dataAsPyType);
-                }
-                //std::vector<uint8_t> data;
-                //reader.ReadBytes(data);
-                //if (!data.empty())
-                //{
-                //    std::string dataAsString{ data.begin(), data.end() };
-                //    py::bytes dataAsPyType(dataAsString);
-                //    // TODO: BUG: This throws an exception in pybind11 code.
-                //    eventHandler(dataAsPyType);
-                //}
+                // Use https://github.com/Microsoft/Windows-universal-samples/blob/master/Samples/BluetoothLE/cs/Scenario2_Client.xaml.cs
+                // As an example.
+                com_array<uint8_t> data;
+                CryptographicBuffer::CopyToByteArray(valueChangedEventArgs.CharacteristicValue(), data);
+                std::string dataAsString{ data.begin(), data.end() };
+                py::bytes dataAsPyType{ dataAsString };
+                eventHandler(dataAsPyType);
             }
         );
     }
