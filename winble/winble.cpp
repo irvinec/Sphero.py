@@ -1,11 +1,12 @@
 #include <pybind11/pybind11.h>
-#include <unordered_set>
+#include <pybind11/stl.h>
+#include <pybind11/functional.h>
 #include <condition_variable>
 #include <chrono>
-#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Devices.Bluetooth.h>
 #include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
 #include <winrt/Windows.Devices.Enumeration.h>
+#include <winrt/Windows.Storage.Streams.h>
 
 // Link to umbrella lib.
 #pragma comment(lib, "windowsapp")
@@ -63,13 +64,50 @@ guid BytesToGuid(const std::string& guidBytes)
     DataWriter guidWriter;
     guidWriter.WriteBytes(guidVector);
     DataReader guidReader = DataReader::FromBuffer(guidWriter.DetachBuffer());
-    return guidReader.ReadGuid();
+    guid result{ guidReader.ReadGuid() };
+    std::reverse(std::begin(result.Data4), std::end(result.Data4));
+    return result;
+}
+
+std::vector<GattCharacteristic> GetCharacteristics(const BluetoothLEDevice& device)
+{
+    std::vector<GattCharacteristic> allCharacteristics;
+
+    GattDeviceServicesResult getServicesResult
+    {
+        device.GetGattServicesAsync(BluetoothCacheMode::Uncached).get()
+    };
+
+    if (getServicesResult.Status() != GattCommunicationStatus::Success)
+    {
+        throw std::exception();
+    }
+
+    auto services = getServicesResult.Services();
+    for (const auto& service : services)
+    {
+        GattCharacteristicsResult characteristicsResult
+        {
+            service.GetCharacteristicsAsync(BluetoothCacheMode::Uncached).get()
+        };
+
+        if (characteristicsResult.Status() != GattCommunicationStatus::Success)
+        {
+            throw std::exception();
+        }
+
+        auto characterisitcs = characteristicsResult.Characteristics();
+        allCharacteristics.insert(allCharacteristics.end(), begin(characterisitcs), end(characterisitcs));
+    }
+
+    return allCharacteristics;
 }
 
 struct WinBleDevice
 {
     WinBleDevice(BluetoothLEDevice&& device)
         : m_device{ std::move(device) }
+        , m_characteristics{ GetCharacteristics(m_device) }
     {
     }
 
@@ -80,98 +118,95 @@ struct WinBleDevice
         writer.WriteBytes(dataBytes);
 
         guid characteristicGuid{ BytesToGuid(characteristicId) };
-        GattDeviceServicesResult getServicesResult
-        {
-            m_device.GetGattServicesAsync(BluetoothCacheMode::Uncached).get()
-        };
-
-        if (getServicesResult.Status() == GattCommunicationStatus::Success)
-        {
-            auto services = getServicesResult.Services();
-            for (const auto& service : services)
+        auto characteristicItr = std::find_if(m_characteristics.begin(), m_characteristics.end(),
+            [&characteristicGuid](const GattCharacteristic& characteristic)
             {
-                GattCharacteristicsResult characteristicsResult
-                {
-                    service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode::Uncached).get()
-                };
-                if (characteristicsResult.Status() == GattCommunicationStatus::Success
-                    && characteristicsResult.Characteristics().Size() > 0)
-                {
-                    GattCharacteristic characteristic
-                    {
-                        characteristicsResult.Characteristics().GetAt(0)
-                    };
-                    // Assume for now that we only got one characteristic.
-                    auto result = characteristic.WriteValueAsync(writer.DetachBuffer()).get();
-
-                    if (result == GattCommunicationStatus::Success)
-                    {
-                        // Successfully wrote to device
-                    }
-                    else
-                    {
-                        throw std::exception("WinBleDevice: Error sending data to bluetooth device.", static_cast<int>(result));
-                    }
-                }
+                return characteristicGuid == characteristic.Uuid();
             }
-        }
-    }
+        );
 
-    void Subscribe(std::string characteristicId, py::function eventHandler)
-    {
-        guid characteristicGuid
-        {
-            BytesToGuid(characteristicId)
-        };
-
-        GattDeviceServicesResult getServicesResult
-        {
-            m_device.GetGattServicesAsync(BluetoothCacheMode::Uncached).get()
-        };
-
-        if (getServicesResult.Status() == GattCommunicationStatus::Success)
-        {
-            auto services = getServicesResult.Services();
-            for (const auto& service : services)
-            {
-                GattCharacteristicsResult characteristicsResult
-                {
-                    service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode::Uncached).get()
-                };
-                if (characteristicsResult.Status() == GattCommunicationStatus::Success
-                    && characteristicsResult.Characteristics().Size() > 0)
-                {
-                    GattCharacteristic characteristic
-                    {
-                        characteristicsResult.Characteristics().GetAt(0)
-                    };
-
-                    event_token valueChangedEventToken = characteristic.ValueChanged(
-                        [&eventHandler](
-                            const GattCharacteristic&,
-                            GattValueChangedEventArgs valueChangedEventArgs
-                        )
-                        {
-                            auto reader = DataReader::FromBuffer(valueChangedEventArgs.CharacteristicValue());
-                            std::vector<uint8_t> data;
-                            // TODO: may need to read as string and convert to py::bytes
-                            reader.ReadBytes(data);
-                            eventHandler(data);
-                        }
-                    );
-                }
-            }
-        }
-        else
+        if (characteristicItr == m_characteristics.end())
         {
             throw std::exception();
         }
+
+        // Assume for now that we only got one characteristic.
+        GattCommunicationStatus result
+        {
+            characteristicItr->WriteValueAsync(writer.DetachBuffer()).get()
+        };
+
+        if (result == GattCommunicationStatus::Success)
+        {
+            // Successfully wrote to device
+        }
+        else
+        {
+            throw std::exception("WinBleDevice: Error sending data to bluetooth device.", static_cast<int>(result));
+        }
+    }
+
+    void Subscribe(std::string characteristicId, py::object eventHandler)
+    {
+        if (!eventHandler) { return; }
+
+        guid characteristicGuid{ BytesToGuid(characteristicId) };
+        auto characteristicItr = std::find_if(m_characteristics.begin(), m_characteristics.end(),
+            [&characteristicGuid](const GattCharacteristic& characteristic)
+            {
+                return characteristicGuid == characteristic.Uuid();
+            }
+        );
+
+        if (characteristicItr == m_characteristics.end())
+        {
+            throw std::exception();
+        }
+
+        // Tell the characteristic we want to receive notifications.
+        GattCommunicationStatus status
+        {
+            characteristicItr->WriteClientCharacteristicConfigurationDescriptorAsync(
+                GattClientCharacteristicConfigurationDescriptorValue::Notify
+            ).get()
+        };
+
+        if (status != GattCommunicationStatus::Success)
+        {
+            throw std::exception();
+        }
+
+        event_token valueChangedEventToken = characteristicItr->ValueChanged(
+            [eventHandler](
+                GattCharacteristic,
+                GattValueChangedEventArgs valueChangedEventArgs
+            )
+            {
+                auto reader = DataReader::FromBuffer(valueChangedEventArgs.CharacteristicValue());
+                hstring data = reader.ReadString(1024);
+                if (!data.empty())
+                {
+                    py::bytes dataAsPyType(to_string(data));
+                    eventHandler(dataAsPyType);
+                }
+                //std::vector<uint8_t> data;
+                //reader.ReadBytes(data);
+                //if (!data.empty())
+                //{
+                //    std::string dataAsString{ data.begin(), data.end() };
+                //    py::bytes dataAsPyType(dataAsString);
+                //    // TODO: BUG: This throws an exception in pybind11 code.
+                //    eventHandler(dataAsPyType);
+                //}
+            }
+        );
     }
 
 private:
     // TODO: save a list of all characteristics and search through that instead.
     // Be sure to us Uncached mode and see if that helps.
     BluetoothLEDevice m_device;
+    std::vector<GattCharacteristic> m_characteristics;
 };
 
 struct WinBleAdapter
