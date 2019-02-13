@@ -53,13 +53,6 @@ DeviceWatcher CreateDeviceWatcher()
     );
 }
 
-guid StringToGuid(const std::string& guidString)
-{
-    guid result;
-    WINRT_IIDFromString(std::wstring(guidString.begin(), guidString.end()).data(), &result);
-    return result;
-}
-
 guid BytesToGuid(const std::string& guidBytes)
 {
     std::vector<uint8_t> guidVector(guidBytes.begin(), guidBytes.end());
@@ -138,17 +131,13 @@ struct WinBleDevice
             characteristicItr->WriteValueAsync(writer.DetachBuffer()).get()
         };
 
-        if (result == GattCommunicationStatus::Success)
-        {
-            // Successfully wrote to device
-        }
-        else
+        if (result != GattCommunicationStatus::Success)
         {
             throw std::exception("WinBleDevice: Error sending data to bluetooth device.", static_cast<int>(result));
         }
     }
 
-    void Subscribe(std::string characteristicId, py::object eventHandler)
+    void Subscribe(std::string characteristicId, const std::function<void(py::bytes)>& eventHandler)
     {
         if (!eventHandler) { return; }
 
@@ -193,6 +182,11 @@ struct WinBleDevice
                 eventHandler(dataAsPyType);
             }
         );
+    }
+
+    void Disconnect()
+    {
+        m_device.Close();
     }
 
 private:
@@ -362,7 +356,8 @@ PYBIND11_MODULE(winble, m)
 
     py::class_<WinBleDevice>(m, "WinBleDevice")
         .def("char_write", &WinBleDevice::WriteToCharacteristic)
-        .def("subscribe", &WinBleDevice::Subscribe);
+        .def("subscribe", &WinBleDevice::Subscribe)
+        .def("disconnect", &WinBleDevice::Disconnect);
 
     m.doc() = "Windows BLE Library";
 

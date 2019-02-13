@@ -1064,9 +1064,9 @@ class BleInterface(BluetoothInterfaceBase):
 
                 self._turn_on_dev_mode()
                 if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
-                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE, self._response_callback)
+                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE, self._pygatt_response_callback)
                 elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
-                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE.bytes, self._response_callback)
+                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE.bytes, self._winble_response_callback)
 
                 is_connected = True
                 break
@@ -1092,7 +1092,18 @@ class BleInterface(BluetoothInterfaceBase):
         if self._device is not None:
             self._device.disconnect()
 
-    def _response_callback(self, characteristic_handle, value):
+    def _pygatt_response_callback(self, characteristic_handle, value):
+        """Callback for when data is received from device.
+
+        Calls registered data received handler
+        """
+        if self.data_received_handler is not None:
+            if callable(self.data_received_handler):
+                self.data_received_handler(value)
+            else:
+                raise ValueError('data_received_handler is not callable.')
+
+    def _winble_response_callback(self, value):
         """Callback for when data is received from device.
 
         Calls registered data received handler
