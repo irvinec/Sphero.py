@@ -10,18 +10,22 @@ import queue
 import enum
 from collections import namedtuple
 
+
+USE_PYBLUEZ = True
 try:
     import bluetooth # pybluez
     HAS_PYBLUEZ = True
 except Exception:
     HAS_PYBLUEZ = False
 
+USE_PYGATT = True
 try:
     import pygatt
     HAS_PYGATT = True
 except Exception:
     HAS_PYGATT = False
 
+USE_WINBLE = True
 try:
     import winble
     HAS_WINBLE = True
@@ -81,15 +85,23 @@ class Sphero(object):
                 Defaults to 1.
         """
         # Create the bluetooth interface
-        global HAS_PYGATT
         global HAS_PYBLUEZ
+        global USE_PYBLUEZ
+        global HAS_PYGATT
+        global USE_PYGATT
+        global HAS_WINBLE
+        global USE_WINBLE
         if bluetooth_interface is None:
             if use_ble:
-                self._bluetooth_interface = BleInterface(search_name=search_name, address=address, port=port)
-            elif HAS_PYBLUEZ:
-                self._bluetooth_interface = BluetoothInterface(search_name=search_name, address=address, port=port)
+                if (HAS_PYGATT and USE_PYGATT) or (HAS_WINBLE and USE_WINBLE):
+                    self._bluetooth_interface = BleInterface(search_name=search_name, address=address, port=port)
+                else:
+                    raise RuntimeError('Could not import a bluetooth LE Library.')
             else:
-                raise RuntimeError('Could not import pybluez which is required for normal bluetooth (non-BLE) communication.')
+                if HAS_PYBLUEZ and USE_PYBLUEZ:
+                    self._bluetooth_interface = BluetoothInterface(search_name=search_name, address=address, port=port)
+                else:
+                    raise RuntimeError('Could not import a bluetooth (non-BLE) library.')
         else:
             self._bluetooth_interface = bluetooth_interface
 
@@ -1054,19 +1066,10 @@ class BleInterface(BluetoothInterfaceBase):
                     continue
 
             if self._address is not None:
-                if self._adapter_type is BleInterface.BleAdapterType.PYGATT:
-                    self._device = self._adapter.connect(
-                        address=self._address,
-                        address_type=pygatt.BLEAddressType.random
-                    )
-                elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
-                    self._device = self._adapter.connect(self._address)
+                self._connect()
 
                 self._turn_on_dev_mode()
-                if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
-                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE, self._pygatt_response_callback)
-                elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
-                    self._device.subscribe(self._ROBOT_SERVICE_RESPONSE.bytes, self._winble_response_callback)
+                self._subscribe()
 
                 is_connected = True
                 break
@@ -1079,6 +1082,21 @@ class BleInterface(BluetoothInterfaceBase):
             raise RuntimeError(
                 f'Count not connect to device {self._address} after {num_retry_attempts} tries.'
             )
+
+    def _connect(self):
+        if self._adapter_type is BleInterface.BleAdapterType.PYGATT:
+            self._device = self._adapter.connect(
+                address=self._address,
+                address_type=pygatt.BLEAddressType.random
+            )
+        elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
+            self._device = self._adapter.connect(self._address)
+
+    def _subscribe(self):
+        if self._adapter_type == BleInterface.BleAdapterType.PYGATT:
+            self._device.subscribe(self._ROBOT_SERVICE_RESPONSE, self._pygatt_response_callback)
+        elif self._adapter_type is BleInterface.BleAdapterType.WINBLE:
+            self._device.subscribe(self._ROBOT_SERVICE_RESPONSE.bytes, self._winble_response_callback)
 
     def send(self, data):
         super().send(data)
@@ -1095,7 +1113,8 @@ class BleInterface(BluetoothInterfaceBase):
     def _pygatt_response_callback(self, characteristic_handle, value):
         """Callback for when data is received from device.
 
-        Calls registered data received handler
+        Calls registered data received handler.
+        Specific to PyGatt.
         """
         if self.data_received_handler is not None:
             if callable(self.data_received_handler):
@@ -1106,7 +1125,8 @@ class BleInterface(BluetoothInterfaceBase):
     def _winble_response_callback(self, value):
         """Callback for when data is received from device.
 
-        Calls registered data received handler
+        Calls registered data received handler.
+        Specific to WinBle.
         """
         if self.data_received_handler is not None:
             if callable(self.data_received_handler):
@@ -1147,7 +1167,8 @@ class BleInterface(BluetoothInterfaceBase):
 
         # Try pygatt BGAPI for all platforms first.
         global HAS_PYGATT
-        if HAS_PYGATT:
+        global USE_PYGATT
+        if HAS_PYGATT and USE_PYGATT:
             try:
                 adapter = pygatt.BGAPIBackend(serial_port=self._port)
                 adapter.start()
@@ -1160,7 +1181,8 @@ class BleInterface(BluetoothInterfaceBase):
         # Try a platform specific adapter.
         if not found_adapter:
             global HAS_WINBLE
-            if _is_windows() and HAS_WINBLE:
+            global USE_WINBLE
+            if _is_windows() and HAS_WINBLE and USE_WINBLE:
                 try:
                     adapter = winble.WinBleAdapter()
                     adapter.start()
@@ -1168,7 +1190,7 @@ class BleInterface(BluetoothInterfaceBase):
                     found_adapter = True
                 except Exception:
                     pass
-            elif _is_linux() and HAS_PYGATT:
+            elif _is_linux() and HAS_PYGATT and USE_PYGATT:
                 try:
                     adapter = pygatt.backends.GATTToolBackend()
                     adapter.start()
@@ -1184,8 +1206,7 @@ class BleInterface(BluetoothInterfaceBase):
         return found_adapter
 
     def _find_device(self):
-        """
-        """
+        """Looks for a matching nearby device."""
         found_device = False
         nearby_devices = None
         try:

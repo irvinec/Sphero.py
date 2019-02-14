@@ -102,6 +102,9 @@ struct WinBleDevice
 {
     WinBleDevice(BluetoothLEDevice&& device)
         : m_device{ std::move(device) }
+        // NOTE: Getting all characteristics only seems to work
+        // in the constructor.
+        // This probably has something to do with needing to be on the UI thread.
         , m_characteristics{ GetCharacteristics(m_device) }
     {
     }
@@ -190,9 +193,8 @@ struct WinBleDevice
     }
 
 private:
-    // TODO: save a list of all characteristics and search through that instead.
-    // Be sure to us Uncached mode and see if that helps.
     BluetoothLEDevice m_device;
+    // In-memory cache of characteristics from the device.
     std::vector<GattCharacteristic> m_characteristics;
 };
 
