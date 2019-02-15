@@ -802,6 +802,8 @@ def _process_messages(
 
     Parses the messages recieved 
     """
+    # TODO: the bug is that when we only recieve part of a message, we lose it when the thread exits.
+    # We should put it back in the queue or keep the loop going...
     message = []
     while not message_queue.empty():
         response_packet = None
@@ -843,6 +845,7 @@ def _parse_message(message):
         else:
             # There is an error in the packet format
             # remove one byte from the buffer and try again.
+            # TODO: look for next SOP1 byte (0xff) instead.
             message.pop(0)
             continue
 
