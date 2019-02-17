@@ -2,7 +2,7 @@
 
 Interact with Sphero devices.
 """
-import os
+import os, sys
 import uuid
 import threading
 import struct
@@ -802,10 +802,11 @@ def _process_messages(
 
     Parses the messages recieved 
     """
-    # TODO: the bug is that when we only recieve part of a message, we lose it when the thread exits.
-    # We should put it back in the queue or keep the loop going...
     message = []
-    while not message_queue.empty():
+    # Keep going as long as there is a message in the queue,
+    # or if we are still processing or looking for more data
+    # in message.
+    while (not message_queue.empty()) or message:
         response_packet = None
         message_part = message_queue.get()
         if message_part is None:
@@ -843,10 +844,9 @@ def _parse_message(message):
             # Return and wait to get more data.
             return None
         else:
-            # There is an error in the packet format
-            # remove one byte from the buffer and try again.
-            # TODO: look for next SOP1 byte (0xff) instead.
-            message.pop(0)
+            # There is an error in the packet format.
+            # Remove all the bytes until the next SOP1 byte.
+            del message[: message.index(_ResponsePacket._START_OF_PACKET_1)]
             continue
 
     return None
@@ -1031,8 +1031,6 @@ class BluetoothInterface(BluetoothInterfaceBase):
 
         return found_device_address
 
-# TODO: Now this class is a mess with differnt adapter contracts.
-# Try to cleanup a bit.
 class BleInterface(BluetoothInterfaceBase):
     """Bluetooth Low Energy (BLE) Interface"""
 
@@ -1325,11 +1323,12 @@ def _parse_locator_info(data):
     """
     """
     return LocatorInfo(
-        struct.unpack('>h', bytes(data[0:2])),  # signed short
-        struct.unpack('>h', bytes(data[2:4])),  # signed short
-        struct.unpack('>h', bytes(data[4:6])),  # signed short
-        struct.unpack('>h', bytes(data[6:8])),  # signed short
-        struct.unpack('>H', bytes(data[8:10]))) # unsigned short
+        _pack_bytes_signed(data[0:2]),
+        _pack_bytes_signed(data[2:4]),
+        _pack_bytes_signed(data[4:6]),
+        _pack_bytes_signed(data[6:8]),
+        _pack_bytes(data[8:10])
+    )
 
 CollisionInfo = namedtuple(
     "CollisionInfo",
@@ -1351,14 +1350,15 @@ def _parse_collision_info(data):
             "data is not 16 bytes long. Actual length: {}".format(len(data)))
 
     return CollisionInfo(
-        struct.unpack('>h', bytes(data[0:2])),  # signed short
-        struct.unpack('>h', bytes(data[2:4])),  # signed short
-        struct.unpack('>h', bytes(data[4:6])),  # signed short
+        _pack_bytes_signed(data[0:2]),
+        _pack_bytes_signed(data[2:4]),
+        _pack_bytes_signed(data[4:6]),
         data[6],
         _pack_bytes(data[7:9]),
         _pack_bytes(data[9:11]),
         data[11],
-        _pack_bytes(data[12:16]))
+        _pack_bytes(data[12:16])
+    )
 
 #endregion
 
@@ -1894,14 +1894,16 @@ def _compute_checksum(packet):
 def _get_byte_at_index(value, index):
     """
     """
+    # NOTE: We could also use int.to_bytes to just convert
+    # value into a byte array.
     return value >> index*8 & 0xFF
 
-# TODO: replace with struct.unpack
 def _pack_bytes(byte_list):
-    """Packs a list of bytes to be a single number.
+    """Packs a list of bytes to be a single unsigned int.
 
     The MSB is the leftmost byte (index 0).
     The LSB is the rightmost byte (index -1 or len(byte_list) - 1).
+    Big Endian order.
     Each value in byte_list is assumed to be a byte (range [0, 255]).
     This assumption is not validated in this function.
 
@@ -1911,15 +1913,24 @@ def _pack_bytes(byte_list):
     Returns:
         The number resulting from the packed bytes.
     """
-    left_shift_amount = 0
-    value = 0
-    # iterate backwards and pack the bits from right to left
-    for byte_value in reversed(byte_list):
-        assert byte_value >= 0 and byte_value <= 255
-        value |= byte_value << left_shift_amount
-        left_shift_amount += 8
+    return int.from_bytes(byte_list, 'big', signed=False)
 
-    return value
+def _pack_bytes_signed(byte_list):
+    """Packs a list of bytes to be a single signed int.
+
+    The MSB is the leftmost byte (index 0).
+    The LSB is the rightmost byte (index -1 or len(byte_list) - 1).
+    Big Endian order.
+    Each value in byte_list is assumed to be a byte (range [0, 255]).
+    This assumption is not validated in this function.
+
+    Args:
+        byte_list (list):
+
+    Returns:
+        The number resulting from the packed bytes.
+    """
+    return int.from_bytes(byte_list, 'big', signed=True)
 
 def _is_windows():
     """
