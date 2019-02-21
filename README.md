@@ -1,5 +1,5 @@
 # SpheroPy
-Python SDK for controlling Sphero devices
+An unofficial Sphero Python SDK to programmatically control Sphero robots.
 
 # Project Status
 **Now Available on PyPi!**
